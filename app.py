@@ -122,20 +122,68 @@ elif role_view == "客戶查詢端":
 elif role_view == "倉儲管理":
     st.header("倉儲與轉運管理")
     wh = db["warehouse"]
-    # ... (前面的進度條代碼)
 
+    # ============================================================
+    # 1. 品質管理：庫存與容量監控 (這就是你要的在庫量與進度條)
+    # ============================================================
+    st.subheader("倉庫容量監控")
+
+    # 獲取當前數據
+    stock_count = len(wh.stored_packages)
+    capacity = wh.capacity
+    usage_ratio = stock_count / capacity if capacity > 0 else 0
+    available_space = capacity - stock_count
+
+    # 建立三欄式指標面板
+    col_metric1, col_metric2, col_metric3 = st.columns(3)
+    with col_metric1:
+        st.metric("當前在庫量", f"{stock_count} 件")
+    with col_metric2:
+        st.metric("總容納能力", f"{capacity} 件")
+    with col_metric3:
+        # 當剩餘空間小於 5，顯示紅色警告 (品質管理防護)
+        status_color = "normal" if available_space > 5 else "inverse"
+        st.metric("剩餘空間", f"{available_space} 件", delta=f"{available_space} left", delta_color=status_color)
+
+    # 顯示進度條
+    st.write(f"**倉庫使用率：{usage_ratio * 100:.1f}%**")
+    st.progress(usage_ratio)
+
+    st.divider()
+
+    # ============================================================
+    # 2. 包裹出庫操作區
+    # ============================================================
+    st.write("### 庫內包裹清單 (待分揀)")
     stored_items = wh.list_packages()
-    for tid in stored_items:
-        c1, c2 = st.columns([3, 1])
-        c1.write(f"包裹編號：`{tid}`")
-        if c2.button("執行分揀出庫", key=tid):
-            p = next(x for x in db["packages"] if x.tracking_number == tid)
-            # 這裡必須更新為 "In Transit"，以便司機能抓到這筆資料
-            p.update_status("In Transit", "物流分揀中心", db['users']['warehouse'])
-            wh.remove_package(tid)
-            st.success(f"包裹 {tid} 已轉交物流部")
-            time.sleep(0.5)
-            st.rerun()
+
+    if not stored_items:
+        st.info("📦 目前倉庫內無包裹。")
+    else:
+        # 使用表格或列表顯示庫內物品
+        for tid in stored_items:
+            # 嘗試獲取包裹詳細重量資訊 (增加品質核對)
+            pkg_obj = next((p for p in db["packages"] if p.tracking_number == tid), None)
+            weight_info = f" | 重量: {pkg_obj.weight} kg" if pkg_obj else ""
+
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.write(f"🔖 單號: `{tid}` {weight_info}")
+            with c2:
+                if st.button("執行分揀出庫", key=f"btn_out_{tid}"):
+                    try:
+                        # 執行邏輯更新
+                        p = next(x for x in db["packages"] if x.tracking_number == tid)
+                        p.update_status("In Transit", "物流分揀中心", db['users']['warehouse'])
+
+                        # 從實體倉庫移除
+                        wh.remove_package(tid)
+
+                        st.success(f"單號 {tid} 已成功出庫")
+                        time.sleep(0.5)
+                        st.rerun()  # 立即更新進度條與數值
+                    except Exception as e:
+                        st.error(f"出庫失敗: {e}")
 
 # --- 配送任務區塊 ---
 elif role_view == "配送任務":
