@@ -1,1 +1,271 @@
+from datetime import datetime
 
+
+class TrackingEvent:
+    """
+    主要功能：
+    ---------------------------------------------------
+    ✓ 事件紀錄（符合需求 1.4.9 / 1.4.10 / 1.4.11）
+    ✓ 追蹤歷史查詢（1.4.13）
+    ✓ 查詢包裹目前狀態（1.4.12）
+    ✓ 搜尋功能：依地點、車輛、倉庫、日期、客戶查詢（1.4.14）
+    ✓ 系統健康狀態監控（非功能性需求：可靠性 2.2）
+    ✓ 錯誤紀錄（資料保護與安全性 2.4）
+    ✓ 一致性檢查（確保事件排序與資料完整性）
+    ---------------------------------------------------
+    """
+
+    # 所有事件的暫存資料庫（模擬 DB）
+    all_events = []
+
+    # 系統級錯誤紀錄
+    error_logs = []
+
+    def __init__(
+        self,
+        tracking_number,
+        location,
+        status_description,
+        user=None,
+        vehicle_id=None,
+        warehouse_id=None,
+        event_type="Transit",        # 🔥 新增：事件類型（Created / Transit / Delivered / Exception）
+        eta=None,                    # 🔥 新增：ETA 預估送達時間
+        exception_type=None          # 🔥 新增：異常類型（遺失 / 損毀 / 延誤）
+    ):
+        """
+        一筆追蹤事件的資料結構
+
+        tracking_number : str       包裹追蹤號碼
+        location        : str       當下位置
+        status_desc     : str       狀態描述
+        user            : User      觸發此事件的使用者（可能為 None）
+        vehicle_id      : str       運輸車輛代號（用於擴充車輛查詢）
+        warehouse_id    : str       倉庫代號（擴充倉庫模組）
+        event_type      : str       事件種類
+        eta             : datetime  預估送達時間
+        exception_type  : str       異常類型（損毀/遺失）
+        """
+
+        self.event_id = len(TrackingEvent.all_events) + 1
+        self.tracking_number = tracking_number
+        self.timestamp = datetime.now()  # 即時紀錄事件時間 1.4.11
+
+        self.location = location
+        self.status_description = status_description
+        self.user = user
+
+        # 原有欄位
+        self.vehicle_id = vehicle_id
+        self.warehouse_id = warehouse_id
+
+        # 🔥 新欄位
+        self.event_type = event_type
+        self.eta = eta
+        self.exception_type = exception_type
+
+    # ============================================================
+    # （A）錯誤處理系統
+    # ============================================================
+    @classmethod
+    def log_error(cls, tracking_number, message):
+        """
+        系統錯誤紀錄，用於提升可靠性（2.2）
+        不拋例外、不中斷流程，僅記錄。
+        """
+        cls.error_logs.append({
+            "time": datetime.now(),
+            "tracking_number": tracking_number,
+            "msg": message
+        })
+
+    # ============================================================
+    # （B）事件新增（核心 1.4.9）
+    # ============================================================
+    @classmethod
+    def log_event(
+        cls,
+        tracking_number,
+        location,
+        status_description,
+        user=None,
+        vehicle_id=None,
+        warehouse_id=None,
+        event_type="Transit",
+        eta=None,
+        exception_type=None
+    ):
+        """
+        建立一筆新的追蹤事件（1.4.9）
+        """
+        try:
+            event = TrackingEvent(
+                tracking_number,
+                location,
+                status_description,
+                user=user,
+                vehicle_id=vehicle_id,
+                warehouse_id=warehouse_id,
+                event_type=event_type,
+                eta=eta,
+                exception_type=exception_type
+            )
+            cls.all_events.append(event)
+            return event
+
+        except Exception as e:
+            cls.log_error(tracking_number, f"事件建立失敗：{str(e)}")
+            return None
+
+    # ============================================================
+    # （C）查詢事件歷史（1.4.13）
+    # ============================================================
+    @classmethod
+    def get_history(cls, tracking_number):
+        return sorted(
+            [e for e in cls.all_events if e.tracking_number == tracking_number],
+            key=lambda e: e.timestamp
+        )
+
+    # ============================================================
+    # （D）查詢最新狀態（1.4.12）
+    # ============================================================
+    @classmethod
+    def get_current_status(cls, tracking_number):
+        history = cls.get_history(tracking_number)
+        return history[-1].status_description if history else None
+
+    # ============================================================
+    # （E）多種搜尋條件（1.4.14）
+    # ============================================================
+    @classmethod
+    def search_by_tracking(cls, tracking_number):
+        return [e for e in cls.all_events if e.tracking_number == tracking_number]
+
+    @classmethod
+    def search_by_location(cls, keyword):
+        return [e for e in cls.all_events if keyword.lower() in e.location.lower()]
+
+    @classmethod
+    def search_by_vehicle(cls, vehicle_id):
+        return [e for e in cls.all_events if e.vehicle_id == vehicle_id]
+
+    @classmethod
+    def search_by_warehouse(cls, warehouse_id):   # 🔥 新增
+        return [e for e in cls.all_events if e.warehouse_id == warehouse_id]
+
+    @classmethod
+    def search_by_customer(cls, customer_id, package_dict):
+        """
+        package_dict：通常為 Package.all_packages
+        """
+        tnums = [
+            pkg.tracking_number for pkg in package_dict.values()
+            if pkg.customer_id == customer_id
+        ]
+        return [e for e in cls.all_events if e.tracking_number in tnums]
+
+    @classmethod
+    def search_by_date_range(cls, start, end):
+        return [e for e in cls.all_events if start <= e.timestamp <= end]
+
+    @classmethod
+    def search_multi(
+        cls,
+        *,
+        tracking=None,
+        customer_id=None,
+        package_dict=None,
+        location=None,
+        date_start=None,
+        date_end=None,
+        vehicle=None,
+        warehouse=None   # 🔥 新增
+    ):
+        """
+        複合搜尋（多條件 AND）
+        """
+        result = cls.all_events
+
+        if tracking:
+            result = [e for e in result if e.tracking_number == tracking]
+
+        if customer_id and package_dict:
+            tnums = [
+                pkg.tracking_number for pkg in package_dict.values()
+                if pkg.customer_id == customer_id
+            ]
+            result = [e for e in result if e.tracking_number in tnums]
+
+        if location:
+            result = [e for e in result if location.lower() in e.location.lower()]
+
+        if vehicle:
+            result = [e for e in result if e.vehicle_id == vehicle]
+
+        if warehouse:
+            result = [e for e in result if e.warehouse_id == warehouse]   # 🔥 新增
+
+        if date_start and date_end:
+            result = [e for e in result if date_start <= e.timestamp <= date_end]
+
+        return result
+
+    # ============================================================
+    # （F）系統健康狀態（非功能性需求 2.2）
+    # ============================================================
+    @classmethod
+    def health_status(cls):
+        events = len(cls.all_events)
+        errors = len(cls.error_logs)
+
+        if errors == 0:
+            system = "UP"
+        elif errors <= 3:
+            system = "DEGRADED"
+        else:
+            system = "DOWN"
+
+        return {
+            "system": system,
+            "event_count": events,
+            "error_count": errors,
+            "last_event": cls.all_events[-1].timestamp if events else None
+        }
+
+    # ============================================================
+    # （G）一致性檢查
+    # ============================================================
+    @classmethod
+    def check_consistency(cls):
+        issues = 0
+
+        grouped = {}
+        for e in cls.all_events:
+            grouped.setdefault(e.tracking_number, []).append(e)
+
+        for tnum, events in grouped.items():
+            sorted_events = sorted(events, key=lambda e: e.timestamp)
+            for i in range(1, len(sorted_events)):
+                if sorted_events[i].timestamp < sorted_events[i - 1].timestamp:
+                    issues += 1
+
+        return issues
+
+    # ============================================================
+    # （H）文字輸出（完整輸出資訊）
+    # ============================================================
+    def __str__(self):
+        user_info = self.user.username if self.user else "System"
+
+        veh = f" | Vehicle: {self.vehicle_id}" if self.vehicle_id else ""
+        wh = f" | Warehouse: {self.warehouse_id}" if self.warehouse_id else ""
+        eta = f" | ETA: {self.eta.strftime('%Y-%m-%d')}" if self.eta else ""
+        exc = f" | Exception: {self.exception_type}" if self.exception_type else ""
+        etp = f" | Type: {self.event_type}"
+
+        return (
+            f"[{self.timestamp.strftime('%Y-%m-%d %H:%M')}] "
+            f"{self.status_description} @ {self.location} "
+            f"(By: {user_info}){veh}{wh}{eta}{exc}{etp}"
+        )
